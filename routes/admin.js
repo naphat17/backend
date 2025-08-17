@@ -729,7 +729,10 @@ router.get("/payments", async(req, res) => {
                    END as payment_type
             FROM payments p
             JOIN users u ON p.user_id = u.id
-            LEFT JOIN memberships m ON p.user_id = m.user_id AND p.created_at BETWEEN m.created_at AND m.expires_at
+            LEFT JOIN (
+                SELECT *, ROW_NUMBER() OVER(PARTITION BY user_id ORDER BY created_at DESC) as rn
+                FROM memberships
+            ) m ON p.user_id = m.user_id AND m.rn = 1
             LEFT JOIN membership_types mt ON m.membership_type_id = mt.id
         `;
         const params = [];
@@ -904,5 +907,29 @@ router.put("/payments/:id/confirm", async(req, res) => {
         res.status(500).json({ message: "Failed to update payment status" })
     }
 })
+
+// Bulk update payment status
+router.put("/payments/bulk-update", async(req, res) => {
+    try {
+        const { paymentIds, status } = req.body;
+
+        if (!['completed', 'failed'].includes(status)) {
+            return res.status(400).json({ message: "Invalid status provided." });
+        }
+        if (!Array.isArray(paymentIds) || paymentIds.length === 0) {
+            return res.status(400).json({ message: "Payment IDs must be a non-empty array." });
+        }
+
+        const [result] = await db.execute(
+            `UPDATE payments SET status = ? WHERE id IN (?) AND status = 'pending'`, [status, paymentIds]
+        );
+
+        res.json({ message: `${result.affectedRows} payments updated successfully.` });
+    } catch (err) {
+        console.error("Error bulk updating payment status:", err);
+        res.status(500).json({ message: "Failed to bulk update payment status." });
+    }
+});
+
 
 module.exports = router

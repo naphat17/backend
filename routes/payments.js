@@ -2,22 +2,29 @@ const express = require("express")
 const db = require("../config/database")
 const { authenticateToken } = require("../middleware/auth")
 const multer = require("multer")
-const path = require("path")
-const fs = require("fs")
+const { CloudinaryStorage } = require("multer-storage-cloudinary")
+const cloudinary = require("cloudinary").v2
 
 const router = express.Router()
 
-// Multer config สำหรับ slip
-const slipsDir = path.join(__dirname, "../public/slips")
-if (!fs.existsSync(slipsDir)) fs.mkdirSync(slipsDir, { recursive: true })
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, slipsDir),
-    filename: (req, file, cb) => {
-        const ext = path.extname(file.originalname)
-        cb(null, `slip_${req.params.id}_${Date.now()}${ext}`)
+// Cloudinary config
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+})
+
+// Multer config สำหรับ Cloudinary
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: "slips",
+        format: async(req, file) => "png", // supports promises as well
+        public_id: (req, file) => `slip_${req.params.id}_${Date.now()}`,
     },
 })
-const upload = multer({ storage })
+
+const upload = multer({ storage: storage })
 
 // Get user payments
 router.get("/user", authenticateToken, async(req, res) => {
@@ -130,7 +137,7 @@ router.post("/:id/upload-slip", authenticateToken, upload.single("slip"), async(
         if (!req.file) {
             return res.status(400).json({ message: "No slip file uploaded" })
         }
-        const slipUrl = `/slips/${req.file.filename}`
+        const slipUrl = req.file.path // URL from Cloudinary
             // อัปเดต payment
         await db.execute(
             "UPDATE payments SET slip_url = ?, status = 'pending' WHERE id = ? AND user_id = ?", [slipUrl, paymentId, req.user.id]
