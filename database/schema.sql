@@ -1,6 +1,6 @@
 -- Swimming Pool Management System Database Schema
 -- สร้างฐานข้อมูลระบบจัดการสระว่ายน้ำโรจนากร
-
+--test
 CREATE DATABASE IF NOT EXISTS swimming_pool_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE swimming_pool_db;
 
