@@ -149,7 +149,7 @@ CREATE TABLE lockers (
     id INT AUTO_INCREMENT PRIMARY KEY,
     code VARCHAR(20) NOT NULL UNIQUE, -- รหัสตู้เก็บของ เช่น L01, L02
     location VARCHAR(100),            -- ตำแหน่ง/โซน
-    status ENUM('available', 'maintenance', 'unavailable') DEFAULT 'available',
+    status ENUM('available', 'maintenance', 'unavailable', 'occupied') DEFAULT 'available',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );

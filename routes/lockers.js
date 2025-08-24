@@ -106,11 +106,77 @@ router.delete("/:id", authenticateToken, async(req, res) => {
 // User: Get all available lockers
 router.get("/available", async(req, res) => {
     try {
-        const [lockers] = await db.execute("SELECT * FROM lockers WHERE status = 'available' ORDER BY code");
+        const { date } = req.query;
+        let query = "SELECT * FROM lockers WHERE status = 'available' ORDER BY code";
+        let params = [];
+
+        if (date) {
+            // If a date is provided, fetch only lockers that are not reserved on that date
+            query = `
+                SELECT 
+                    l.*,
+                    CASE WHEN lr.id IS NOT NULL THEN TRUE ELSE FALSE END AS is_reserved_on_selected_date
+                FROM 
+                    lockers l
+                LEFT JOIN 
+                    locker_reservations lr ON l.id = lr.locker_id 
+                    AND lr.reservation_date = ? 
+                    AND lr.status IN ('pending', 'confirmed')
+                WHERE 
+                    l.status = 'available'
+                    AND lr.id IS NULL
+                ORDER BY 
+                    l.code
+            `;
+            params.push(date);
+        }
+
+        const [lockers] = await db.execute(query, params);
         res.json({ lockers });
     } catch (err) {
         console.error("Error fetching available lockers:", err);
         res.status(500).json({ message: "Failed to fetch available lockers" });
+    }
+});
+
+// Admin: Get specific locker reservation info for a date
+router.get("/:id/reservation", authenticateToken, async(req, res) => {
+    // Ensure only admins can access this route
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ message: "Access denied. Admins only." });
+    }
+    try {
+        const lockerId = req.params.id;
+        const { date } = req.query;
+        
+        if (!date) {
+            return res.status(400).json({ message: "Date parameter is required" });
+        }
+        
+        const [reservations] = await db.execute(
+            `SELECT 
+                lr.*,
+                u.username as user_name,
+                u.email as user_email,
+                l.code as locker_code
+            FROM locker_reservations lr
+            JOIN users u ON lr.user_id = u.id
+            JOIN lockers l ON lr.locker_id = l.id
+            WHERE lr.locker_id = ? AND lr.reservation_date = ? 
+            AND lr.status IN ('pending', 'confirmed')
+            ORDER BY lr.created_at DESC
+            LIMIT 1`,
+            [lockerId, date]
+        );
+        
+        if (reservations.length > 0) {
+            res.json({ reservation: reservations[0] });
+        } else {
+            res.status(404).json({ message: "No reservation found for this locker on the specified date" });
+        }
+    } catch (err) {
+        console.error("Error fetching locker reservation:", err);
+        res.status(500).json({ message: "Failed to fetch locker reservation" });
     }
 });
 
@@ -135,7 +201,7 @@ router.post("/reservations", authenticateToken, async(req, res) => {
     try {
         await connection.beginTransaction();
 
-        const { locker_id, reservation_date, payment_method } = req.body;
+        const { locker_id, reservation_date, payment_method, amount } = req.body;
         if (!locker_id || !reservation_date || !payment_method) {
             await connection.rollback();
             return res.status(400).json({ message: "locker_id, reservation_date and payment_method are required" });
@@ -150,7 +216,7 @@ router.post("/reservations", authenticateToken, async(req, res) => {
             return res.status(400).json({ message: "Locker is already reserved for this date" });
         }
 
-        const amount = 30; // fixed price for locker per day
+        const finalAmount = amount || 30; // use provided amount or default to 30 THB
 
         let reservationStatus = 'pending';
         let paymentStatus = 'pending';
@@ -179,7 +245,7 @@ router.post("/reservations", authenticateToken, async(req, res) => {
         // Create payment
         const [paymentResult] = await connection.execute(
             `INSERT INTO payments (user_id, amount, status, payment_method, transaction_id)
-       VALUES (?, ?, ?, ?, ?)`, [req.user.id, amount, paymentStatus, payment_method, `LKR${reservationId}_${Date.now()}`]
+       VALUES (?, ?, ?, ?, ?)`, [req.user.id, finalAmount, paymentStatus, payment_method, `LKR${reservationId}_${Date.now()}`]
         );
         const paymentId = paymentResult.insertId;
 

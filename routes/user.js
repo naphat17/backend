@@ -1,15 +1,50 @@
 const express = require("express")
 const bcrypt = require("bcryptjs")
+const multer = require("multer")
+const { CloudinaryStorage } = require("multer-storage-cloudinary")
+const cloudinary = require("cloudinary").v2
 const db = require("../config/database")
 const { authenticateToken } = require("../middleware/auth")
 
 const router = express.Router()
 
+// Cloudinary config
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+})
+
+// Configure multer for profile photo uploads to Cloudinary
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: "profiles",
+        format: async (req, file) => "png",
+        public_id: (req, file) => `profile_${req.user.id}_${Date.now()}`,
+    },
+})
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 2 * 1024 * 1024 // 2MB limit
+  },
+  fileFilter: function (req, file, cb) {
+    // Check file type
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true)
+    } else {
+      cb(new Error('Only image files are allowed!'), false)
+    }
+  }
+})
+
 // Get user profile
 router.get("/profile", authenticateToken, async(req, res) => {
     try {
         const [users] = await db.execute(
-            "SELECT id, username, email, first_name, last_name, phone, address, date_of_birth, id_card, role, status, created_at FROM users WHERE id = ?", [req.user.id],
+            "SELECT id, username, email, first_name, last_name, phone, address, date_of_birth, id_card, organization, age, medical_condition, emergency_contact_name, emergency_contact_relationship, emergency_contact_phone, profile_photo, role, status, created_at, member_number FROM users WHERE id = ?", [req.user.id],
         )
 
         if (users.length === 0) {
@@ -26,20 +61,70 @@ router.get("/profile", authenticateToken, async(req, res) => {
 // Update user profile
 router.put("/profile", authenticateToken, async(req, res) => {
     try {
-        const { first_name, last_name, phone, address } = req.body
+        const { 
+            first_name, 
+            last_name, 
+            phone, 
+            address, 
+            date_of_birth, 
+            id_card, 
+            organization, 
+            age, 
+            medical_condition, 
+            emergency_contact_name, 
+            emergency_contact_relationship, 
+            emergency_contact_phone 
+        } = req.body
 
-        await db.execute("UPDATE users SET first_name = ?, last_name = ?, phone = ?, address = ? WHERE id = ?", [
-            first_name,
-            last_name,
-            phone,
-            address,
-            req.user.id,
-        ])
+        await db.execute(
+            "UPDATE users SET first_name = ?, last_name = ?, phone = ?, address = ?, date_of_birth = ?, id_card = ?, organization = ?, age = ?, medical_condition = ?, emergency_contact_name = ?, emergency_contact_relationship = ?, emergency_contact_phone = ? WHERE id = ?", 
+            [
+                first_name,
+                last_name,
+                phone,
+                address,
+                date_of_birth,
+                id_card,
+                organization,
+                age,
+                medical_condition,
+                emergency_contact_name,
+                emergency_contact_relationship,
+                emergency_contact_phone,
+                req.user.id,
+            ]
+        )
 
         res.json({ message: "Profile updated successfully" })
     } catch (error) {
         console.error("Update profile error:", error)
         res.status(500).json({ message: "Failed to update profile" })
+    }
+})
+
+// Upload profile photo
+router.post("/profile/upload-photo", authenticateToken, upload.single('profile_photo'), async(req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: "No file uploaded" })
+        }
+
+        // Get the Cloudinary URL
+        const photoUrl = req.file.path // Cloudinary URL
+
+        // Update user's profile_photo in database
+        await db.execute(
+            "UPDATE users SET profile_photo = ? WHERE id = ?",
+            [photoUrl, req.user.id]
+        )
+
+        res.json({ 
+            message: "Profile photo uploaded successfully",
+            profile_photo: photoUrl
+        })
+    } catch (error) {
+        console.error("Upload photo error:", error)
+        res.status(500).json({ message: "Failed to upload photo" })
     }
 })
 
@@ -91,7 +176,7 @@ router.get("/dashboard", authenticateToken, async(req, res) => {
 
         // Get membership info (only active ones)
         const [memberships] = await db.execute(
-            `SELECT mt.name as type, m.expires_at, m.status
+            `SELECT mt.name as type, m.expires_at, m.status, m.membership_type_id
              FROM memberships m 
              JOIN membership_types mt ON m.membership_type_id = mt.id 
              WHERE m.user_id = ? AND m.status = 'active'
@@ -107,6 +192,7 @@ router.get("/dashboard", authenticateToken, async(req, res) => {
                 user_category: userCategoryDetails.name,
                 pay_per_session_price: userCategoryDetails.pay_per_session_price,
                 annual_price: userCategoryDetails.annual_price,
+                membership_type_id: membershipData.membership_type_id, // Ensure this is included
             };
         } else if (!membershipData && userCategoryDetails) {
             // If no active membership, but user has a category, still provide category info
@@ -118,6 +204,7 @@ router.get("/dashboard", authenticateToken, async(req, res) => {
                 user_category: userCategoryDetails.name,
                 pay_per_session_price: userCategoryDetails.pay_per_session_price,
                 annual_price: userCategoryDetails.annual_price,
+                membership_type_id: null, // No membership type ID for inactive membership
             };
         }
 

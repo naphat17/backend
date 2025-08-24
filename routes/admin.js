@@ -42,7 +42,8 @@ router.get("/dashboard", async(req, res) => {
             `SELECT
                 COALESCE(SUM(CASE WHEN DATE(created_at) = CURDATE() THEN amount ELSE 0 END), 0) as today_revenue,
                 COALESCE(SUM(CASE WHEN DATE(created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY) THEN amount ELSE 0 END), 0) as yesterday_revenue,
-                COALESCE(SUM(CASE WHEN DATE(created_at) >= DATE_FORMAT(NOW(), '%Y-%m-01') THEN amount ELSE 0 END), 0) as monthly_revenue
+                COALESCE(SUM(CASE WHEN DATE(created_at) >= DATE_FORMAT(NOW(), '%Y-%m-01') THEN amount ELSE 0 END), 0) as monthly_revenue,
+                COALESCE(SUM(amount), 0) as total_revenue
              FROM payments
              WHERE status = 'completed'`
         );
@@ -75,6 +76,7 @@ router.get("/dashboard", async(req, res) => {
             today_revenue: paymentStats[0] ? paymentStats[0].today_revenue : 0,
             yesterday_revenue: paymentStats[0] ? paymentStats[0].yesterday_revenue : 0,
             monthly_revenue: paymentStats[0] ? paymentStats[0].monthly_revenue : 0,
+            total_revenue: paymentStats[0] ? paymentStats[0].total_revenue : 0,
             total_lockers: lockerStats[0] ? lockerStats[0].total_lockers : 0,
             available_lockers: lockerStats[0] ? lockerStats[0].available_lockers : 0,
             current_date: new Date().toISOString().split('T')[0]
@@ -724,6 +726,7 @@ router.get("/payments", async(req, res) => {
                    CASE
                        WHEN p.transaction_id LIKE 'RSV%' THEN 'การจองสระว่ายน้ำ'
                        WHEN p.transaction_id LIKE 'LKR%' THEN 'การจองตู้เก็บของ'
+                       WHEN mt.name IS NOT NULL AND (mt.name LIKE '%รายปี%' OR mt.name = 'Annual') THEN 'สมาชิกรายปี'
                        WHEN mt.name IS NOT NULL THEN CONCAT('สมาชิกภาพ - ', mt.name)
                        ELSE 'อื่นๆ'
                    END as payment_type
@@ -928,6 +931,160 @@ router.put("/payments/bulk-update", async(req, res) => {
     } catch (err) {
         console.error("Error bulk updating payment status:", err);
         res.status(500).json({ message: "Failed to bulk update payment status." });
+    }
+});
+
+// Get reports data
+router.get("/reports", async(req, res) => {
+    try {
+        // Usage Stats
+        const [usageStats] = await db.execute(`
+            SELECT 
+                (SELECT COUNT(*) FROM reservations WHERE status IN ('confirmed', 'pending')) as totalReservations,
+                (SELECT COUNT(*) FROM users WHERE role = 'user') as totalMembers,
+                (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'completed') as totalRevenue,
+                (SELECT COUNT(*) FROM users WHERE role = 'user' AND status = 'active') as activeUsers
+        `);
+
+        // Membership Stats
+        const [membershipStats] = await db.execute(`
+            SELECT 
+                mt.name,
+                COUNT(m.id) as count,
+                ROUND((COUNT(m.id) * 100.0 / (SELECT COUNT(*) FROM memberships WHERE status = 'active')), 2) as percentage
+            FROM membership_types mt
+            LEFT JOIN memberships m ON mt.id = m.membership_type_id AND m.status = 'active'
+            GROUP BY mt.id, mt.name
+            ORDER BY count DESC
+        `);
+
+        // Revenue by Channel
+        const [revenueByChannel] = await db.execute(`
+            SELECT 
+                payment_method as channel,
+                COALESCE(SUM(amount), 0) as amount,
+                COUNT(*) as count
+            FROM payments 
+            WHERE status = 'completed'
+            GROUP BY payment_method
+            ORDER BY amount DESC
+        `);
+
+        // User Frequency (top 10 most active users)
+        const [userFrequency] = await db.execute(`
+            SELECT 
+                CONCAT(u.first_name, ' ', u.last_name) as userName,
+                COUNT(r.id) as frequency,
+                MAX(r.reservation_date) as lastVisit
+            FROM users u
+            LEFT JOIN reservations r ON u.id = r.user_id
+            WHERE u.role = 'user'
+            GROUP BY u.id, u.first_name, u.last_name
+            ORDER BY frequency DESC
+            LIMIT 10
+        `);
+
+        // Monthly Revenue (last 12 months)
+        const [monthlyRevenue] = await db.execute(`
+            SELECT 
+                DATE_FORMAT(created_at, '%Y-%m') as month,
+                COALESCE(SUM(amount), 0) as revenue
+            FROM payments 
+            WHERE status = 'completed' 
+            AND created_at >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
+            GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+            ORDER BY month
+        `);
+
+        // Annual Subscribers (by year)
+        const [annualSubscribers] = await db.execute(`
+            SELECT 
+                YEAR(m.created_at) as year,
+                COUNT(DISTINCT m.user_id) as subscriberCount,
+                COALESCE(SUM(p.amount), 0) as revenue
+            FROM memberships m
+            LEFT JOIN payments p ON m.user_id = p.user_id 
+                AND YEAR(p.created_at) = YEAR(m.created_at)
+                AND p.status = 'completed'
+            WHERE m.status = 'active'
+            GROUP BY YEAR(m.created_at)
+            ORDER BY year DESC
+        `);
+
+        const reportData = {
+            usageStats: usageStats[0] || {
+                totalReservations: 0,
+                totalMembers: 0,
+                totalRevenue: 0,
+                activeUsers: 0
+            },
+            membershipStats: membershipStats || [],
+            revenueByChannel: revenueByChannel || [],
+            userFrequency: userFrequency || [],
+            monthlyRevenue: monthlyRevenue || [],
+            annualSubscribers: annualSubscribers || []
+        };
+
+        res.json(reportData);
+    } catch (err) {
+        console.error("Error fetching reports data:", err);
+        res.status(500).json({ message: "Failed to fetch reports data" });
+    }
+});
+
+// Get booking stats for a specific pool
+router.get("/booking-stats", async(req, res) => {
+    try {
+        const { pool_id, year, month } = req.query;
+        
+        if (!pool_id || !year || !month) {
+            return res.status(400).json({ message: "pool_id, year, and month are required" });
+        }
+        
+        const poolId = parseInt(pool_id);
+        const yearInt = parseInt(year);
+        const monthInt = parseInt(month);
+        
+        // Get the number of days in the month
+        const endDate = new Date(yearInt, monthInt, 0);
+        const bookingStats = [];
+        
+        for (let day = 1; day <= endDate.getDate(); day++) {
+            const currentDate = new Date(yearInt, monthInt - 1, day);
+            const dateString = currentDate.toISOString().split('T')[0];
+            
+            // Count actual bookings for this date and pool
+            const [bookingRows] = await db.execute(
+                `SELECT COUNT(*) as total_bookings 
+                 FROM reservations r 
+                 WHERE r.pool_resource_id = ? 
+                 AND DATE(r.reservation_date) = ? 
+                 AND r.status IN ('confirmed', 'pending')`,
+                [poolId, dateString]
+            );
+            
+            // Get pool capacity
+            const [poolRows] = await db.execute(
+                `SELECT capacity FROM pool_resources WHERE id = ?`,
+                [poolId]
+            );
+            
+            const totalBookings = bookingRows[0]?.total_bookings || 0;
+            const poolCapacity = poolRows[0]?.capacity || 20;
+            const availableSlots = Math.max(0, poolCapacity - totalBookings);
+
+            bookingStats.push({
+                date: dateString,
+                total_bookings: totalBookings,
+                available_slots: availableSlots,
+                pool_id: poolId
+            });
+        }
+        
+        res.json(bookingStats);
+    } catch (err) {
+        console.error("Error fetching booking stats:", err);
+        res.status(500).json({ message: "Failed to fetch booking stats" });
     }
 });
 

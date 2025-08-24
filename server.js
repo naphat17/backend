@@ -22,9 +22,11 @@ app.use(cors())
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
-// Static path สำหรับ slip
+// Static path สำหรับ slip (legacy support)
 const slipsPath = path.join(__dirname, "public", "slips")
 app.use("/slips", express.static(slipsPath))
+
+// Note: Profile uploads now use Cloudinary instead of local storage
 
 // Routes
 app.use("/api/auth", authRoutes)
