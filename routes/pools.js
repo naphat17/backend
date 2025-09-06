@@ -133,4 +133,57 @@ router.get("/availability", async(req, res) => {
     }
 })
 
+// Get booking statistics for a specific pool and month
+router.get("/:id/bookings/stats", async(req, res) => {
+    try {
+        const poolId = req.params.id
+        const { year, month } = req.query
+        
+        if (!year || !month) {
+            return res.status(400).json({ message: "Year and month parameters are required" })
+        }
+        
+        // Validate pool exists
+        const [pools] = await db.execute(
+            "SELECT id, name, capacity FROM pool_resources WHERE id = ?",
+            [poolId]
+        )
+        
+        if (pools.length === 0) {
+            return res.status(404).json({ message: "Pool not found" })
+        }
+        
+        const pool = pools[0]
+        
+        // Get booking statistics for the month
+        const query = `
+            SELECT 
+                DATE(reservation_date) as date,
+                COUNT(*) as total_bookings,
+                ? - COUNT(*) as available_slots
+            FROM reservations 
+            WHERE pool_resource_id = ? 
+                AND YEAR(reservation_date) = ? 
+                AND MONTH(reservation_date) = ?
+                AND status IN ('pending', 'confirmed')
+            GROUP BY DATE(reservation_date)
+            ORDER BY date
+        `
+        
+        const [stats] = await db.execute(query, [pool.capacity, poolId, year, month])
+        
+        res.json({ 
+            pool_id: parseInt(poolId),
+            pool_name: pool.name,
+            capacity: pool.capacity,
+            year: parseInt(year),
+            month: parseInt(month),
+            stats: stats || []
+        })
+    } catch (error) {
+        console.error("Error getting booking stats:", error)
+        res.status(500).json({ message: "Database error" })
+    }
+})
+
 module.exports = router

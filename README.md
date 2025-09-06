@@ -34,7 +34,7 @@ npm run init-db
 npm run dev
 \`\`\`
 
-The API will be running on `https://backend-l7q9.onrender.com`
+The API will be running on `http://localhost:3001`
 
 ## 📋 Sample Accounts
 
@@ -165,9 +165,9 @@ npm run dev
 
 ### 3. เข้าใช้งาน
 - Frontend: `http://localhost:3000`
-- API: `https://backend-l7q9.onrender.com`
+- API: `http://localhost:3001`
 - phpMyAdmin: `http://localhost/phpmyadmin`
-- Health Check: `https://backend-l7q9.onrender.com/api/health`
+- Health Check: `http://localhost:3001/api/health`
 
 ## 📊 การจัดการฐานข้อมูลผ่าน phpMyAdmin
 
