@@ -1,8 +1,30 @@
 const express = require("express")
 const db = require("../config/database")
 const { authenticateToken } = require("../middleware/auth")
+const multer = require("multer")
+const { CloudinaryStorage } = require("multer-storage-cloudinary")
+const cloudinary = require("cloudinary").v2
 
 const router = express.Router()
+
+// Cloudinary config
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+})
+
+// Multer config สำหรับ Cloudinary
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: "locker_slips",
+        format: async(req, file) => "png",
+        public_id: (req, file) => `locker_slip_${Date.now()}`,
+    },
+})
+
+const upload = multer({ storage: storage })
 
 // Admin: Get all lockers, with optional date for reservation status
 router.get("/", authenticateToken, async(req, res) => {
@@ -196,7 +218,7 @@ router.get("/reservations/user", authenticateToken, async(req, res) => {
 });
 
 // User: Create a new locker reservation with payment (fixed 30 THB), no time range
-router.post("/reservations", authenticateToken, async(req, res) => {
+router.post("/reservations", authenticateToken, upload.single("slip"), async(req, res) => {
     const connection = await db.getConnection();
     try {
         await connection.beginTransaction();
@@ -242,11 +264,17 @@ router.post("/reservations", authenticateToken, async(req, res) => {
         );
         const reservationId = reservationResult.insertId;
 
+        // Handle slip upload for bank transfer
+        let slipUrl = null
+        if (payment_method === 'bank_transfer' && req.file) {
+            slipUrl = req.file.path // URL from Cloudinary
+        }
+
         // Create payment
         const [paymentResult] = await connection.execute(
-            `INSERT INTO payments (user_id, amount, status, payment_method, transaction_id)
-       VALUES (?, ?, ?, ?, ?)`, [req.user.id, finalAmount, paymentStatus, payment_method, `LKR${reservationId}_${Date.now()}`]
-        );
+            `INSERT INTO payments (user_id, amount, status, payment_method, transaction_id, slip_url)
+       VALUES (?, ?, ?, ?, ?, ?)`, [req.user.id, finalAmount, paymentStatus, payment_method, `LKR${reservationId}_${Date.now()}`, slipUrl]
+        )
         const paymentId = paymentResult.insertId;
 
         await connection.commit();

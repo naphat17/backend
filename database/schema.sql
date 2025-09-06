@@ -18,6 +18,7 @@ CREATE TABLE user_categories (
 -- ตารางผู้ใช้งาน
 CREATE TABLE users (
     id INT AUTO_INCREMENT PRIMARY KEY,
+    member_number VARCHAR(20) UNIQUE,
     username VARCHAR(50) UNIQUE NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
@@ -28,6 +29,14 @@ CREATE TABLE users (
     date_of_birth DATE,
     id_card VARCHAR(20),
     user_category_id INT,
+    organization VARCHAR(255),
+    age INT,
+    gender ENUM('male', 'female'),
+    medical_condition TEXT,
+    emergency_contact_name VARCHAR(100),
+    emergency_contact_relationship VARCHAR(50),
+    emergency_contact_phone VARCHAR(20),
+    profile_photo VARCHAR(255),
     role ENUM('user', 'admin') DEFAULT 'user',
     status ENUM('active', 'inactive') DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

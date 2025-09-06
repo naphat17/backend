@@ -26,7 +26,11 @@ app.use(express.urlencoded({ extended: true }))
 const slipsPath = path.join(__dirname, "public", "slips")
 app.use("/slips", express.static(slipsPath))
 
-// Note: Profile uploads now use Cloudinary instead of local storage
+// Static path สำหรับ profile uploads
+const uploadsPath = path.join(__dirname, "uploads", "profiles")
+app.use("/uploads/profiles", express.static(uploadsPath))
+
+// Note: Profile uploads now use local storage
 
 // Routes
 app.use("/api/auth", authRoutes)

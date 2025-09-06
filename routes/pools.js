@@ -53,4 +53,84 @@ router.get("/", async(req, res) => {
     }
 })
 
+// Get pool availability for a specific date
+router.get("/availability", async(req, res) => {
+    try {
+        const { date, pool_id } = req.query
+        
+        if (!date) {
+            return res.status(400).json({ message: "Date parameter is required" })
+        }
+        
+        // Get pool capacity
+        let poolQuery = "SELECT id, name, capacity FROM pool_resources WHERE status = 'available'"
+        let poolParams = []
+        
+        if (pool_id) {
+            poolQuery += " AND id = ?"
+            poolParams.push(pool_id)
+        }
+        
+        const [pools] = await db.execute(poolQuery, poolParams)
+        
+        if (pools.length === 0) {
+            return res.json({ isFull: true, message: "ไม่พบสระที่ใช้งานได้" })
+        }
+        
+        // Check reservations for the specified date
+        const reservationQuery = `
+            SELECT pool_resource_id, COUNT(*) as reservation_count
+            FROM reservations 
+            WHERE reservation_date = ? AND status IN ('pending', 'confirmed')
+            ${pool_id ? 'AND pool_resource_id = ?' : ''}
+            GROUP BY pool_resource_id
+        `
+        
+        let reservationParams = [date]
+        if (pool_id) {
+            reservationParams.push(pool_id)
+        }
+        
+        const [reservations] = await db.execute(reservationQuery, reservationParams)
+        
+        // Check if any pool is full
+        let isFull = false
+        let message = ""
+        
+        for (const pool of pools) {
+            const reservation = reservations.find(r => r.pool_resource_id === pool.id)
+            const currentReservations = reservation ? reservation.reservation_count : 0
+            
+            if (currentReservations >= pool.capacity) {
+                isFull = true
+                message = `สระ ${pool.name} เต็มแล้วสำหรับวันที่ ${date} กรุณาเลือกวันอื่น`
+                break
+            }
+        }
+        
+        if (!isFull && pools.length > 0) {
+            message = "มีที่ว่างสำหรับการจอง"
+        }
+        
+        res.json({ 
+            isFull, 
+            message,
+            pools: pools.map(pool => {
+                const reservation = reservations.find(r => r.pool_resource_id === pool.id)
+                const currentReservations = reservation ? reservation.reservation_count : 0
+                return {
+                    id: pool.id,
+                    name: pool.name,
+                    capacity: pool.capacity,
+                    currentReservations,
+                    available: pool.capacity - currentReservations
+                }
+            })
+        })
+    } catch (error) {
+        console.error("Error checking pool availability:", error)
+        res.status(500).json({ message: "Database error" })
+    }
+})
+
 module.exports = router
